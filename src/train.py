@@ -1,5 +1,6 @@
 import mlflow
 import mlflow.sklearn
+from mlflow.models import infer_signature
 from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
 from sklearn.metrics import accuracy_score, f1_score, log_loss
 from sklearn.model_selection import StratifiedKFold
@@ -60,7 +61,18 @@ def evaluate_model(model, X_train, y_train, model_name, config):
     train_loss = sum(train_log_loss_scores) / len(train_log_loss_scores)
     val_loss = sum(val_log_loss_scores) / len(val_log_loss_scores)
 
-    with mlflow.start_run():
+    # Train final model on the complete training dataset
+    model.fit(X_train, y_train)
+
+    # Create MLflow signature and input example
+    input_example = X_train[:1]
+    predictions = model.predict(X_train)
+    signature = infer_signature(X_train, predictions)
+
+    with mlflow.start_run() as run:
+        mlflow.set_tag("model_family", model_name)
+        mlflow.set_tag("milestone", "3")
+
         mlflow.log_param("model_family", model_name)
 
         for parameter, value in config.items():
@@ -78,8 +90,12 @@ def evaluate_model(model, X_train, y_train, model_name, config):
         mlflow.sklearn.log_model(
             model,
             "model",
+            signature=signature,
+            input_example=input_example,
             skops_trusted_types=["sklearn.tree._tree.Tree"],
         )
+
+        run_id = run.info.run_id
 
     print(f"{model_name} - {config}")
     print(f"Train Macro F1: {train_f1:.4f}")
@@ -88,13 +104,16 @@ def evaluate_model(model, X_train, y_train, model_name, config):
     print(f"Validation Accuracy: {val_accuracy:.4f}")
     print(f"Train Log Loss: {train_loss:.4f}")
     print(f"Validation Log Loss: {val_loss:.4f}")
+    print(f"Run ID: {run_id}")
     print("-" * 50)
+
+    return run_id, val_f1
 
 
 def main():
     X_train, X_test, y_train, y_test = load_and_split_data()
 
-    mlflow.set_experiment("wine-classification-milestone-2")
+    mlflow.set_experiment("Wine-Cultivar-Classification")
 
     random_forest_configs = [
         {"n_estimators": 100, "max_depth": 5},
