@@ -1,37 +1,142 @@
 import mlflow
-from sklearn.datasets import load_wine
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
+import mlflow.sklearn
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.metrics import accuracy_score, f1_score, log_loss
+from sklearn.model_selection import StratifiedKFold
+from src.data import load_and_split_data
+
+
+def evaluate_model(model, X_train, y_train, model_name, config):
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
+
+    train_f1_scores = []
+    val_f1_scores = []
+    train_accuracy_scores = []
+    val_accuracy_scores = []
+    train_log_loss_scores = []
+    val_log_loss_scores = []
+
+    for train_index, val_index in cv.split(X_train, y_train):
+        X_fold_train = X_train[train_index]
+        X_fold_val = X_train[val_index]
+        y_fold_train = y_train[train_index]
+        y_fold_val = y_train[val_index]
+
+        model.fit(X_fold_train, y_fold_train)
+
+        train_predictions = model.predict(X_fold_train)
+        val_predictions = model.predict(X_fold_val)
+
+        train_probabilities = model.predict_proba(X_fold_train)
+        val_probabilities = model.predict_proba(X_fold_val)
+
+        train_f1_scores.append(
+            f1_score(y_fold_train, train_predictions, average="macro")
+        )
+        val_f1_scores.append(
+            f1_score(y_fold_val, val_predictions, average="macro")
+        )
+
+        train_accuracy_scores.append(
+            accuracy_score(y_fold_train, train_predictions)
+        )
+        val_accuracy_scores.append(
+            accuracy_score(y_fold_val, val_predictions)
+        )
+
+        train_log_loss_scores.append(
+            log_loss(y_fold_train, train_probabilities)
+        )
+        val_log_loss_scores.append(
+            log_loss(y_fold_val, val_probabilities)
+        )
+
+    train_f1 = sum(train_f1_scores) / len(train_f1_scores)
+    val_f1 = sum(val_f1_scores) / len(val_f1_scores)
+
+    train_accuracy = sum(train_accuracy_scores) / len(train_accuracy_scores)
+    val_accuracy = sum(val_accuracy_scores) / len(val_accuracy_scores)
+
+    train_loss = sum(train_log_loss_scores) / len(train_log_loss_scores)
+    val_loss = sum(val_log_loss_scores) / len(val_log_loss_scores)
+
+    with mlflow.start_run():
+        mlflow.log_param("model_family", model_name)
+
+        for parameter, value in config.items():
+            mlflow.log_param(parameter, value)
+
+        mlflow.log_metric("train_macro_f1", train_f1)
+        mlflow.log_metric("validation_macro_f1", val_f1)
+
+        mlflow.log_metric("train_accuracy", train_accuracy)
+        mlflow.log_metric("validation_accuracy", val_accuracy)
+
+        mlflow.log_metric("train_log_loss", train_loss)
+        mlflow.log_metric("validation_log_loss", val_loss)
+
+        mlflow.sklearn.log_model(
+            model,
+            "model",
+            skops_trusted_types=["sklearn.tree._tree.Tree"],
+        )
+
+    print(f"{model_name} - {config}")
+    print(f"Train Macro F1: {train_f1:.4f}")
+    print(f"Validation Macro F1: {val_f1:.4f}")
+    print(f"Train Accuracy: {train_accuracy:.4f}")
+    print(f"Validation Accuracy: {val_accuracy:.4f}")
+    print(f"Train Log Loss: {train_loss:.4f}")
+    print(f"Validation Log Loss: {val_loss:.4f}")
+    print("-" * 50)
 
 
 def main():
-    wine = load_wine()
+    X_train, X_test, y_train, y_test = load_and_split_data()
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        wine.data,
-        wine.target,
-        test_size=0.2,
-        random_state=42,
-        stratify=wine.target,
-    )
+    mlflow.set_experiment("wine-classification-milestone-2")
 
-    mlflow.set_experiment("wine-classification")
+    random_forest_configs = [
+        {"n_estimators": 100, "max_depth": 5},
+        {"n_estimators": 200, "max_depth": 10},
+        {"n_estimators": 300, "max_depth": None},
+    ]
 
-    with mlflow.start_run():
-        model = LogisticRegression(max_iter=1000, random_state=42)
-        model.fit(X_train, y_train)
+    gradient_boosting_configs = [
+        {"n_estimators": 100, "learning_rate": 0.05},
+        {"n_estimators": 150, "learning_rate": 0.10},
+        {"n_estimators": 200, "learning_rate": 0.15},
+    ]
 
-        predictions = model.predict(X_test)
-        accuracy = accuracy_score(y_test, predictions)
+    for config in random_forest_configs:
+        model = RandomForestClassifier(
+            n_estimators=config["n_estimators"],
+            max_depth=config["max_depth"],
+            random_state=42,
+        )
 
-        mlflow.log_param("model", "LogisticRegression")
-        mlflow.log_param("max_iter", 1000)
-        mlflow.log_metric("accuracy", accuracy)
+        evaluate_model(
+            model,
+            X_train,
+            y_train,
+            "RandomForestClassifier",
+            config,
+        )
 
-        mlflow.sklearn.log_model(model, "model")
+    for config in gradient_boosting_configs:
+        model = GradientBoostingClassifier(
+            n_estimators=config["n_estimators"],
+            learning_rate=config["learning_rate"],
+            random_state=42,
+        )
 
-        print(f"Test Accuracy: {accuracy:.4f}")
+        evaluate_model(
+            model,
+            X_train,
+            y_train,
+            "GradientBoostingClassifier",
+            config,
+        )
 
 
 if __name__ == "__main__":
